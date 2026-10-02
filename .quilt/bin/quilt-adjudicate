@@ -189,10 +189,21 @@ OUT=".quilt/adjudications/$SHORT.json"
     printf '\n      ],\n'
     printf '      "reason": "two attributed claims for key %s carry different values; ' \
       "$key"
-    printf 'the record names the incoming claim as winner so the merge has one surviving '
-    printf 'line, and keeps the other verbatim. No judge was consulted and no model ran. '
-    printf 'To take the other number instead, restore the base text and merge again.",\n'
-    printf '      "to_accept_the_loser": "git checkout HEAD -- %s && git merge --abort"' \
+      printf 'the record names the incoming claim as winner so the merge has one surviving '
+      printf 'line, and keeps the other verbatim. No judge was consulted and no model ran.",\n'
+      # FIX 2026-10-02: the old field was
+      #   "to_accept_the_loser": "git checkout HEAD -- <path> && git merge --abort"
+      # and BOTH halves were wrong. (1) 'git merge --abort' ALWAYS fails: the
+      # refusal happens at pre-merge-commit time, after git has cleared
+      # MERGE_HEAD, so there is no merge in progress to abort. (2) 'git checkout
+      # HEAD -- <path>' restores the BASE text, which is the LOSER's value, and
+      # the refusal left the tree untouched -- so it restored the state the
+      # reader was already in. The record offered a handle to nowhere and named
+      # the wrong target. The truth is more useful: the loser is ALREADY the
+      # working tree, and the winner is recoverable from this record's own tree.
+      printf '      "loser_status": "already in your working tree; the refusal left the tree untouched, so keeping it is a no-op",\n'
+      printf '      "to_accept_the_winner": "git checkout %s -- %s && git commit --no-verify -q -m \"adjudicated: %s=%s\""' \
+        "$TREE" "$wpath" "$key" "$wval"
       "$wpath"
     printf '\n    }'
   done
