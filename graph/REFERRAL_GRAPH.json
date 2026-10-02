@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "edges": [
+    {
+      "id": "e1-wave4-query-discharge-reasons",
+      "source": {
+        "repo": "SuperInstance/quilt-in-git",
+        "ref": "main",
+        "as_of_commit": "43f10b2b77c67809e7afe865179b6e9c7dbf4081"
+      },
+      "target": {
+        "repo": "SuperInstance/quilt-adjudication",
+        "ref": "main"
+      },
+      "verbs": [
+        {
+          "source_verb": "divergence",
+          "target_semantic": "pre-merge probe: the machine-generated list of contested dials; the adjudication note annotates that list instead of re-deriving it (the two true statements about the same fact, written down rather than discarded)"
+        },
+        {
+          "source_verb": "trusted-but-unaudited",
+          "target_semantic": "the surface a dispute is worth recording against: enumerate what is currently trusted-but-unaudited at any ref before recording a dispute on it"
+        },
+        {
+          "source_verb": "coverage",
+          "target_semantic": "doubt-grammar discharge record: what stopped being checked, what now covers it, what event reopens it (LEDGER.md fields stopped / covered_by / revisit / status — 'discharge requires a reason' is this repo's thesis in one line)"
+        },
+        {
+          "source_verb": "attest",
+          "target_semantic": "who held the ref an adjudicated claim came from: names the agent position behind a receipted claim"
+        }
+      ],
+      "boundaries": [
+        "committed-tree-only reads",
+        "receipted ≠ true",
+        "substring coverage advisory",
+        "referral-not-dependency"
+      ],
+      "booked_by": "laneE (referral-graph booking-unit lane)",
+      "date": "2026-10-02",
+      "receipt": "PR #1 (open as of 2026-10-02)"
+    }
+  ]
+}
