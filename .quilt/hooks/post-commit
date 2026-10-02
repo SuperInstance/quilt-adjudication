@@ -1,0 +1,45 @@
+#!/bin/sh
+# quilt post-commit — the tick engine.
+#
+# For a commit that touches cells/:
+#   1. .quilt/bin/quilt-receipt  writes .quilt/receipts/<short>.json
+#   2. .quilt/bin/quilt-cascade  recomputes dial 14 of linked cells
+#   3. if cascade changed dial files: git add cells/ and auto-commit
+#      "quilt: cascade after <short>" with --no-verify
+#   4. append "tick <short> <receipt-hash> <cells>" to .quilt/watch.log
+#      where <receipt-hash> is .quilt/bin/quilt-hash of the receipt just
+#      written — an actual content hash, not a second copy of the short hash.
+#
+# Commits touching no cells/ path exit 0 silently, as do the hook's own
+# "quilt: cascade after ..." commits (no recursion).
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT" || exit 1
+
+case "$(git log -1 --format=%s HEAD)" in
+  "quilt: cascade after"*) exit 0 ;;
+esac
+
+CELL_PATHS=$(git diff-tree --root --no-commit-id --name-only -r HEAD -- cells/)
+[ -n "$CELL_PATHS" ] || exit 0
+
+SHORT=$(git rev-parse --short HEAD)
+CELLS=$(printf '%s\n' "$CELL_PATHS" | cut -d/ -f2 | sort -u | paste -sd, -)
+
+.quilt/bin/quilt-receipt >/dev/null
+.quilt/bin/quilt-cascade
+
+if [ -n "$(git status --porcelain -- cells/)" ]; then
+  git add cells/
+  git commit --no-verify -qm "quilt: cascade after $SHORT" >/dev/null 2>&1
+fi
+
+mkdir -p .quilt
+# Field 2 is the content hash of the receipt this tick just wrote — the field
+# the README has always called a receipt-hash and that has always been a second
+# copy of field 1. See .quilt/bin/quilt-hash.
+RH=""
+[ -f ".quilt/receipts/$SHORT.json" ] && RH=$(.quilt/bin/quilt-hash ".quilt/receipts/$SHORT.json")
+[ -n "$RH" ] || RH="none"
+printf 'tick %s %s %s\n' "$SHORT" "$RH" "$CELLS" >> .quilt/watch.log
+exit 0

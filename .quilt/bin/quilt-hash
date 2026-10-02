@@ -1,0 +1,39 @@
+#!/bin/sh
+# quilt-hash <file> — print a content hash of <file>, prefixed by its algorithm.
+#
+# The README has always documented the watch line as
+#
+#     tick <short> <receipt-hash> <cells>
+#
+# and for the life of this repository the second field was a second copy of
+# the first. `printf 'tick %s %s %s\n' "$SHORT" "$SHORT" ...` — so the field
+# named "receipt-hash" was a commit hash typed twice, and the receipt it named
+# was never hashed by anything. There was no hash computation in the repository
+# at all: no sha256sum, no shasum, no git hash-object, nothing.
+#
+# This is that computation, in one place, so post-commit and post-merge cannot
+# disagree about what a receipt hash is.
+#
+# The algorithm is PREFIXED to the digest (sha256:abcd... / sha1:abcd...) and
+# that is not decoration. The preferred implementation is sha256, but a machine
+# with neither sha256sum nor shasum falls back to `git hash-object`, which is
+# sha1 and is always present because this whole runtime is git hooks. A bare
+# 40-hex and a bare 64-hex in the same column would be indistinguishable
+# without counting characters, and a hash you cannot identify is a hash you
+# cannot check.
+
+set -u
+
+[ $# -eq 1 ] || { echo "usage: quilt-hash <file>" >&2; exit 2; }
+[ -f "$1" ] || { echo "quilt-hash: no such file: $1" >&2; exit 1; }
+
+if command -v sha256sum >/dev/null 2>&1; then
+  printf 'sha256:%s\n' "$(sha256sum "$1" | cut -d' ' -f1)"
+elif command -v shasum >/dev/null 2>&1; then
+  printf 'sha256:%s\n' "$(shasum -a 256 "$1" | cut -d' ' -f1)"
+elif command -v openssl >/dev/null 2>&1; then
+  printf 'sha256:%s\n' "$(openssl dgst -sha256 "$1" | sed 's/.*= *//')"
+else
+  # git is guaranteed: this script only ever runs from a git hook.
+  printf 'sha1:%s\n' "$(git hash-object -t blob --no-filters "$1")"
+fi

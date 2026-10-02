@@ -1,0 +1,223 @@
+#!/bin/sh
+# quilt-adjudicate — REFUSE a merge that would silently assert two different
+# values for one key.
+#
+#   quilt-adjudicate --index   scan the would-be merge result (the index),
+#                             name the record by the tree the merge would
+#                             produce, and refuse. Runs from pre-merge-commit,
+#                             so a non-zero exit means NO merge commit exists.
+#   quilt-adjudicate --head    scan the committed tree of HEAD. Runs from
+#                             post-merge, for a merge that got past
+#                             --no-verify. The commit already exists here;
+#                             this cannot un-merge it, and does not pretend to.
+#
+# A CLAIM is a line in a cell body:
+#
+#     claim: <key> = <value>  by <attribution>
+#
+# in cells/<alias>/body. Only ATTRIBUTED claims are adjudicated: a claim with
+# no `by` is an anonymous assertion, and two anonymous assertions are a
+# conversation, not a contradiction. Two claims conflict when they name the
+# same key, carry different values, AND come from different attributions. The
+# same author restating a number is not a conflict; that is a retraction.
+#
+# THE RULE, and the limits of it. The winner is whichever claim came in on the
+# side being merged. That is a fixed, local, arithmetic tie-break — a sort
+# order, not a judgment. It exists so the merge has one surviving line and a
+# one-command way to change its mind, NOT because this script knows which
+# number is true. It does not, and it will not pretend to: there is no judge
+# here and no model in the loop. Both texts are copied into the record
+# verbatim, so the loser's claim survives the refusal intact. The record says
+# `"adjudication": "mechanical"` on every conflict it writes.
+#
+# Writes .quilt/adjudications/<short>.json and exits 1 when it finds one.
+# Touches no dial file and no cell file: the only path it ever writes is under
+# .quilt/adjudications/.
+
+set -u
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1
+cd "$ROOT" || exit 1
+
+MODE=head
+case "${1:-}" in
+  --index) MODE=index ;;
+  --head)  MODE=head ;;
+  *) echo "usage: quilt-adjudicate --index | --head" >&2; exit 2 ;;
+esac
+
+mkdir -p .quilt/adjudications
+
+# ------------------------------------------------------------ what we scan
+# index -> the merge result not yet committed. head -> HEAD's committed tree.
+if [ "$MODE" = index ]; then REV=":"; else REV="HEAD:"; fi
+
+# The record is named for the thing it judged. Before the commit exists the
+# only stable name for "what this merge would have produced" is its tree, so
+# that is what it is named for; afterwards it is the commit, like a receipt.
+if [ "$MODE" = index ]; then
+  TREE=$(git write-tree 2>/dev/null) || exit 1
+  SHORT=$(printf '%s' "$TREE" | cut -c1-7)
+else
+  TREE=$(git rev-parse HEAD^{tree})
+  SHORT=$(git rev-parse --short HEAD)
+fi
+
+HEAD_BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "")
+# At pre-merge-commit time git has already cleared MERGE_HEAD, so a refusal
+# that only recorded MERGE_HEAD named an empty string. ORIG_HEAD is what git
+# leaves pointing at the pre-merge commit, which is the fact worth recording.
+MERGE_HEAD=$(git rev-parse -q --verify MERGE_HEAD 2>/dev/null \
+             || git rev-parse -q --verify ORIG_HEAD 2>/dev/null || echo "")
+# git commit time, never wall clock: the record is reproducible from history.
+TS=$(git log -1 --format=%ct HEAD 2>/dev/null || echo 0)
+
+# ------------------------------------------------------------ extract claims
+# One TSV line per attributed claim: path, key, value, attribution, verbatim.
+# `side` says whether the same text was already in HEAD (base) or arrived with
+# the merge (incoming); that is the only input to the winner rule.
+extract() { # extract <rev-prefix>
+  local p base
+  for p in $(git ls-files | grep '^cells/[^/]*/body$' | sort); do
+    git show "$1$p" 2>/dev/null | awk -v path="$p" '
+      /^[[:space:]]*claim:/ {
+        raw = $0
+        gsub(/^[ \t]+|[ \t]+$/, "", raw)   # verbatim, `claim:` prefix intact
+        line = $0
+        sub(/^[ \t]*claim:[ \t]*/, "", line)
+        eq = index(line, "=")
+        if (eq == 0) next
+        key = substr(line, 1, eq - 1)
+        val = substr(line, eq + 1)
+        b = index(val, " by ")
+        if (b == 0) next                      # unattributed: not adjudicable
+        value = substr(val, 1, b - 1)
+        attr  = substr(val, b + 4)
+        gsub(/^[ \t]+|[ \t]+$/, "", key)
+        gsub(/^[ \t]+|[ \t]+$/, "", value)
+        gsub(/^[ \t]+|[ \t]+$/, "", attr)
+        if (key == "" || value == "" || attr == "") next
+        printf "%s\t%s\t%s\t%s\t%s\n", path, key, value, attr, raw
+      }'
+  done
+}
+
+# tag <claim-tsv> : mark each claim base if its verbatim text was already in
+# HEAD's copy of that file, incoming otherwise.
+tag() {
+  awk -F'\t' '
+    { line = $0
+      split(line, f, "\t")
+      path = f[1]; text = f[5]
+      cmd = "git show HEAD:" path " 2>/dev/null | grep -Fqx -- " q(text)
+      side = "incoming"
+      if (system(cmd) == 0) side = "base"
+      print line "\t" side
+    }
+    function q(s,   t) { t = s; gsub(/\047/, "\047\\\047\047", t); return "\047" t "\047" }
+  '
+}
+
+CLAIMS=$(extract "$REV" | tag)
+[ -n "$CLAIMS" ] || exit 0
+
+# ------------------------------------------------------------ find conflicts
+# A key is in conflict when it has >=2 distinct values from >=2 attributions.
+CONFLICTS=$(printf '%s\n' "$CLAIMS" | awk -F'\t' '
+  { key = $2
+    vals[key SUBSEP $3] = 1
+    attr[key SUBSEP $4] = 1
+    keys[key] = 1
+  }
+  END { for (k in keys) {
+          nv = 0; for (i in vals) { split(i, a, SUBSEP); if (a[1] == k) nv++ }
+          na = 0; for (i in attr) { split(i, a, SUBSEP); if (a[1] == k) na++ }
+          if (nv > 1 && na > 1) print k
+        } }' | sort -u)
+
+[ -n "$CONFLICTS" ] || exit 0
+
+# ------------------------------------------------------------------- record
+OUT=".quilt/adjudications/$SHORT.json"
+{
+  printf '{\n'
+  printf '  "kind": "adjudication",\n'
+  printf '  "refused": "%s",\n' "$MODE"
+  printf '  "named_by": "%s",\n' \
+    "$([ "$MODE" = index ] && echo 'merge tree the refusal judged' || echo 'merge commit')"
+  printf '  "short": "%s",\n' "$SHORT"
+  printf '  "tree": "%s",\n' "$TREE"
+  printf '  "head_before": "%s",\n' "$HEAD_BEFORE"
+  printf '  "merge_head": "%s",\n' "$MERGE_HEAD"
+  printf '  "ts": %s,\n' "$TS"
+  printf '  "adjudication": "mechanical",\n'
+  printf '  "judge": "none — no model is in this loop, by design",\n'
+  printf '  "rule": "winner is the claim that arrived on the side being merged; '
+  printf 'this is an ordering, not a judgment about truth",\n'
+  printf '  "conflicts": [\n'
+
+  first=1
+  for key in $CONFLICTS; do
+    group=$(printf '%s\n' "$CLAIMS" | awk -F'\t' -v k="$key" '$2 == k')
+    # winner: the incoming claim. Losers: every distinct other value.
+    win=$(printf '%s\n' "$group" | awk -F'\t' '$6 == "incoming" {print; exit}')
+    [ -n "$win" ] || win=$(printf '%s\n' "$group" | head -n 1)
+    wpath=$(printf '%s\n' "$win"  | cut -f1)
+    wval=$(printf  '%s\n' "$win"  | cut -f3)
+    wattr=$(printf '%s\n' "$win" | cut -f4)
+    wline=$(printf '%s\n' "$win" | cut -f5)
+
+    [ $first -eq 1 ] || printf ',\n'
+    first=0
+    printf '    {\n'
+    printf '      "key": "%s",\n' "$key"
+    printf '      "cell": "%s",\n' "$wpath"
+    printf '      "winner": {"value": "%s", "by": "%s", "side": "incoming", "line": "%s"},\n' \
+      "$wval" "$wattr" "$wline"
+    printf '      "losers": [\n'
+    lfirst=1
+    for l in $(printf '%s\n' "$group" | awk -F'\t' -v wv="$wval" '$3 != wv {print $3}' | sort -u); do
+      lrow=$(printf '%s\n' "$group" | awk -F'\t' -v lv="$l" '$3 == lv {print; exit}')
+      lpath=$(printf '%s\n' "$lrow" | cut -f1)
+      lattr=$(printf '%s\n' "$lrow" | cut -f4)
+      lline=$(printf '%s\n' "$lrow" | cut -f5)
+      [ $lfirst -eq 1 ] || printf ',\n'
+      lfirst=0
+      printf '        {"value": "%s", "by": "%s", "side": "base", "line": "%s"}' \
+        "$l" "$lattr" "$lline"
+    done
+    printf '\n      ],\n'
+    printf '      "reason": "two attributed claims for key %s carry different values; ' \
+      "$key"
+    printf 'the record names the incoming claim as winner so the merge has one surviving '
+    printf 'line, and keeps the other verbatim. No judge was consulted and no model ran. '
+    printf 'To take the other number instead, restore the base text and merge again.",\n'
+    printf '      "to_accept_the_loser": "git checkout HEAD -- %s && git merge --abort"' \
+      "$wpath"
+    printf '\n    }'
+  done
+  printf '\n  ]\n'
+  printf '}\n'
+} > "$OUT"
+
+# ------------------------------------------------------------------ refuse
+{
+  echo "quilt: REFUSING the merge — the result asserts one key twice with two values."
+  for key in $CONFLICTS; do
+    echo ""
+    echo "  key: $key"
+    printf '%s\n' "$CLAIMS" | awk -F'\t' -v k="$key" '$2 == k { \
+        printf "    %-28s by %s\n", $3, $4 }' | sort -u
+  done
+  echo ""
+  echo "  Both texts are preserved verbatim in: $OUT"
+  echo "  Winner rule: the claim that arrived on the side being merged."
+  echo "  That is an ordering, not a judgment about which is true."
+  echo "  No judge ran. If the losing number is the right one:"
+  for key in $CONFLICTS; do
+    wpath=$(printf '%s\n' "$CLAIMS" | awk -F'\t' -v k="$key" '$2 == k && $6 == "incoming" {print $1; exit}')
+    echo "    git checkout HEAD -- $wpath && git merge --abort && git merge <branch>"
+  done
+} >&2
+
+exit 1

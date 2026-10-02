@@ -1,0 +1,27 @@
+#!/bin/sh
+# quilt-tick <alias> <dialN> <value> — set one dial and commit it.
+#
+#   .quilt/bin/quilt-tick auth 0 0.42
+#
+# Writes cells/<alias>/dials/<dialN>, stages it, and commits
+# "tick: <alias> dial<N>=<value>". The hooks do the rest: freeze check
+# (pre-commit), receipt + cascade + watch line (post-commit). A frozen cell
+# makes the commit — and therefore this script — exit non-zero.
+
+set -e
+
+[ $# -eq 3 ] || { echo "usage: quilt-tick <alias> <dialN 0..15> <value>" >&2; exit 2; }
+alias=$1; dial=$2; value=$3
+
+awk -v d="$dial" 'BEGIN{ if (d !~ /^(1[0-5]|[0-9])$/) exit 1 }' \
+  || { echo "quilt-tick: dial must be 0..15, got '$dial'" >&2; exit 2; }
+awk -v v="$value" 'BEGIN{ if (v + 0 != v) exit 1 }' \
+  || { echo "quilt-tick: value must be numeric, got '$value'" >&2; exit 2; }
+
+ROOT=$(git rev-parse --show-toplevel)
+cd "$ROOT"
+
+mkdir -p "cells/$alias/dials"
+printf '%s\n' "$value" > "cells/$alias/dials/$dial"
+git add "cells/$alias/dials/$dial"
+git commit -m "tick: $alias dial$dial=$value"

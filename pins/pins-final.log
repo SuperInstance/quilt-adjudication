@@ -1,0 +1,79 @@
+# quilt-in-git pins  src=/workspace/projects/fleet-triage/quilt-in-git-adj
+# scratch=/tmp/quilt-pins-xKPVri  git=2.39.5
+
+PASS P1a dial commit accepted
+PASS P1b receipt exists (.quilt/receipts/8d4653b.json)
+PASS P1c receipt contains commit hash
+PASS P1d receipt contains alias a
+PASS P1e watch.log grew by exactly one line (1->2)
+PASS P1f watch line starts with 'tick' (tick 8d4653b sha256:ef8c7c2ac8a74428d8002aaa76abc6fedba2dd1af07476459970fa06add3fe66 a)
+PASS P2a freeze commit (dial15=0.8) accepted
+PASS P2b next commit touching cell rejected (rc=1)
+PASS P2c error mentions frozen
+PASS P2d dial file unchanged by rejected commit (still 0.7 as written)
+PASS P2e committed dial1 still 0.0
+PASS P2f no new commit was created
+PASS P3a tick a dial1=0.9 committed
+PASS P3b b.dials/14 == 0.4500 (== 0.45)
+PASS P3c 'quilt: cascade after' commit exists
+PASS P4c new dial value 0.99 committed
+PASS P4d rewind (checkout prev -- cells/a/) restores 0.11
+PASS P5c fresh clone: no receipt, no watch line (hooks inert)
+PASS P5e quilt-init set core.hooksPath=.quilt/hooks
+PASS P5g receipt appears after quilt-init (c2cf411.json)
+PASS P5h watch.log grew after quilt-init
+PASS P6b non-cell commit created NO receipt
+PASS P6c non-cell commit added NO watch.log line
+PASS P7a clean merge of a cells/ branch committed
+PASS P7b HEAD is a 2-parent merge commit
+PASS P7c merge produced a receipt (bdc4148.json)
+PASS P7d receipt records merge: true
+PASS P7e receipt records parents: 2
+PASS P7f receipt names the changed cell a
+PASS P7g receipt count grew on merge
+PASS P7h watch.log grew by exactly one line on merge
+PASS P8a single-claim merge accepted
+PASS P8b contradictory merge refused (rc=1)
+PASS P8b2 the refusal is what stopped the merge
+PASS P8c HEAD did not move — no merge commit was created
+PASS P8d adjudication record written (51c65e7.json)
+PASS P8e losing claim kept VERBATIM in the record
+PASS P8f winning claim kept VERBATIM in the record
+PASS P8g record names a winner and a losers list
+PASS P8h record states a reason
+PASS P8i record declares the adjudication mechanical and judge-free
+PASS P8j refusal touched no dial file
+PASS P8k one author restating a key is NOT treated as a contradiction
+PASS P8l an unattributed assertion is not adjudicable
+PASS P8m1 two PRs on the same line really do conflict
+PASS P8m2 hand-resolved contradiction refused (rc=1)
+PASS P8m3 the refusal came from pre-commit
+PASS P8m4 HEAD did not move on the git-commit path either
+PASS P8m5 adjudication record written on the git-commit path
+    watch line: tick 00ca536 sha256:8de9b4f4624fa636b0d6a15e7c0d9b5e69c46bdafc32004c791875701383e7f6 a
+PASS P9b field 2 differs from field 1
+PASS P9c field 1 names the receipt this tick wrote (00ca536.json)
+PASS P9d field 2 is algorithm-prefixed (sha256)
+PASS P9e field 2 == independently recomputed hash of the receipt
+PASS P9f the hash changes when the receipt changes (it is a content hash)
+PASS P9g the hash is stable across runs (deterministic)
+PASS P11a verdict_of attributes each check to its own pin
+PASS P10a quilt-init wrote all four hooks
+PASS P10b generated hooks are byte-identical to the checked-in copies
+PASS P10c all four hooks are executable
+
+# ---- per-pin verdicts ----
+P1 receipt+watch on dial commit    : PASS
+P2 freeze enforcement              : PASS
+P3 cascade                         : PASS
+P4 rewind                          : PASS
+P5 clone needs quilt-init          : PASS
+P6 non-cell commit silent          : PASS
+P7 merge is journalled             : PASS
+P8 contradiction refuses merge     : PASS
+P9 watch field 2 is a content hash : PASS
+P11 verdict table attributes correctly: PASS
+P10 no hook/generator drift         : PASS
+
+PINS: 11/11 pins pass (59 checks pass, 0 checks fail)
+PINS: ALL PASS

@@ -1,0 +1,47 @@
+#!/bin/sh
+# quilt-cascade — recompute ENTANGLEMENT (dial 14) for every cell with links.
+#
+# For each non-comment line "<src> <weight>" in cells/<alias>/links:
+#     candidate = (cells/<src>/dials/1) * weight
+# (a missing source cell or dial counts as 0), then
+#     cells/<alias>/dials/14 = max(candidates), rounded to 4 decimals via awk.
+#
+# Deterministic: cells are visited in glob (sorted) order, one pass, each
+# cell's value depends only on its links file and the sources' dial 1 (no
+# transitive propagation). A value is rewritten only when numerically
+# different, so a settled cascade leaves the tree untouched and generates no
+# cascade commit.
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1
+cd "$ROOT" || exit 1
+
+for links in cells/*/links; do
+  [ -f "$links" ] || continue
+  alias=${links#cells/}
+  alias=${alias%/links}
+
+  new=$(awk '
+    /^[[:space:]]*#/ { next }        # comments
+    /^[[:space:]]*$/ { next }        # blank lines
+    NF >= 2 {
+      src = $1; w = $2 + 0
+      v = 0
+      fn = "cells/" src "/dials/1"
+      if ((getline line < fn) > 0) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        v = line + 0
+      }
+      close(fn)
+      val = v * w
+      if (!seen || val > max) { max = val; seen = 1 }
+    }
+    END { if (!seen) max = 0; printf "%.4f", max }
+  ' "$links")
+
+  cur=$(tr -d '[:space:]' < "cells/$alias/dials/14" 2>/dev/null)
+  cur=${cur:-0}
+  awk -v a="$cur" -v b="$new" 'BEGIN{exit !(a + 0 == b + 0)}' \
+    || printf '%s\n' "$new" > "cells/$alias/dials/14"
+done
+
+exit 0

@@ -1,0 +1,26 @@
+# quilt-in-git pins  src=/tmp/zlanes2/lane7/wt
+# scratch=/tmp/quilt-pins-IM8ZyJ  git=2.43.0
+
+cp: cannot stat '/tmp/zlanes2/lane7/wt/.quilt': No such file or directory
+FAIL P1-0 setup (quilt-init runnable?)
+cp: cannot stat '/tmp/zlanes2/lane7/wt/.quilt': No such file or directory
+FAIL P2-0 setup (quilt-init runnable?)
+cp: cannot stat '/tmp/zlanes2/lane7/wt/.quilt': No such file or directory
+FAIL P3-0 setup (quilt-init runnable?)
+cp: cannot stat '/tmp/zlanes2/lane7/wt/.quilt': No such file or directory
+FAIL P4-0 setup (quilt-init runnable?)
+cp: cannot stat '/tmp/zlanes2/lane7/wt/.quilt': No such file or directory
+FAIL P5-0 setup (quilt-init runnable?)
+cp: cannot stat '/tmp/zlanes2/lane7/wt/.quilt': No such file or directory
+FAIL P6-0 setup (quilt-init runnable?)
+
+# ---- per-pin verdicts ----
+P1 receipt+watch on dial commit : FAIL
+P2 freeze enforcement          : FAIL
+P3 cascade                      : FAIL
+P4 rewind                       : FAIL
+P5 clone needs quilt-init       : FAIL
+P6 non-cell commit silent       : FAIL
+
+PINS: 0/6 pins pass (0 checks pass, 6 checks fail)
+PINS: FAILURES PRESENT (scratch kept for inspection: /tmp/quilt-pins-IM8ZyJ)

@@ -1,0 +1,260 @@
+#!/bin/sh
+# quilt-init — bootstrap the quilt runtime inside a git repository.
+#
+#   mkdir -p cells .quilt/{receipts,adjudications,bin,hooks}
+#   git config core.hooksPath .quilt/hooks      (modern git; no .git/hooks symlinks)
+#   (re)write .quilt/hooks/{pre-commit,post-commit,post-merge,pre-merge-commit}, chmod +x
+#
+# Idempotent: safe to re-run. The hook files are generated from this script —
+# edit quilt-init, not the hook files. MUST be run once per clone: the hooks
+# travel with the repository but core.hooksPath is local config and never
+# does.
+
+set -e
+
+ROOT=$(git rev-parse --show-toplevel) \
+  || { echo "quilt-init: not inside a git repository" >&2; exit 1; }
+cd "$ROOT"
+
+mkdir -p cells .quilt/receipts .quilt/adjudications .quilt/bin .quilt/hooks
+git config core.hooksPath .quilt/hooks
+
+# The generated journal is NOT tracked, and that is a fix, not a preference.
+# watch.log, receipts/ and adjudications/ are written by hooks on every commit.
+# As tracked files they are modified by every single commit, so the instant two
+# branches exist, every merge between them text-conflicts on the journal before
+# it ever reaches the cells. Measured on git 2.39.5: with the journal tracked,
+# `git merge` of a one-line cells/ change dies with "Auto-merging
+# .quilt/watch.log / CONFLICT (content)". The substrate is single-writer by
+# construction; a journal that conflicts on contact cannot survive contact with
+# a second writer. It is still a journal, still on disk, still growing — it is
+# just derived state that history can regenerate, so it does not belong in the
+# index the merge has to reconcile.
+printf 'watch.log\nreceipts/\nadjudications/\n' > .quilt/.gitignore
+
+# ---------------------------------------------------------------- pre-commit
+cat > .quilt/hooks/pre-commit <<'QUILT_HOOK_EOF'
+#!/bin/sh
+# quilt pre-commit — FREEZE enforcement, and the merge refusal.
+#
+# A cell whose COMMITTED dial 15 (FREEZE) is > 0.5 rejects any staged change
+# to that cell. Staged paths that are only cells/<alias>/dials/15 are always
+# allowed, so a freeze can always be set or lifted (in its own commit).
+# Arithmetic uses awk, not bc (bc may be absent).
+#
+# Why the merge check lives HERE as well as in pre-merge-commit: git runs
+# pre-merge-commit on the clean `git merge` path, but it does NOT run it when
+# a conflict was resolved by hand and the merge was concluded with a plain
+# `git commit`. That is the common path, and it is the path the two-PR fixture
+# takes. Measured on git 2.39.5: with only pre-merge-commit installed, that
+# merge commit was created and the hook never ran. pre-commit does run there,
+# so the refusal is enforced from both doors.
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT" || exit 1
+
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  if [ -x .quilt/bin/quilt-adjudicate ]; then
+    .quilt/bin/quilt-adjudicate --index || exit 1
+  fi
+fi
+
+STAGED=$(git diff --cached --name-only -- cells/ | sort -u)
+[ -n "$STAGED" ] || exit 0
+
+for alias in $(printf '%s\n' "$STAGED" | cut -d/ -f2 | sort -u); do
+  others=$(printf '%s\n' "$STAGED" | grep "^cells/$alias/" \
+           | grep -v "^cells/$alias/dials/15$" || true)
+  [ -n "$others" ] || continue   # freeze management only — allowed
+  frz=$(git show "HEAD:cells/$alias/dials/15" 2>/dev/null | tr -d '[:space:]')
+  frz=${frz:-0}
+  if awk -v f="$frz" 'BEGIN{exit !(f + 0 > 0.5)}'; then
+    echo "ERROR: cell $alias is frozen (dial 15 = $frz)" >&2
+    echo "       unfreeze first: .quilt/bin/quilt-tick $alias 15 0.0" >&2
+    exit 1
+  fi
+done
+exit 0
+QUILT_HOOK_EOF
+
+# --------------------------------------------------------------- post-commit
+cat > .quilt/hooks/post-commit <<'QUILT_HOOK_EOF'
+#!/bin/sh
+# quilt post-commit — the tick engine.
+#
+# For a commit that touches cells/:
+#   1. .quilt/bin/quilt-receipt  writes .quilt/receipts/<short>.json
+#   2. .quilt/bin/quilt-cascade  recomputes dial 14 of linked cells
+#   3. if cascade changed dial files: git add cells/ and auto-commit
+#      "quilt: cascade after <short>" with --no-verify
+#   4. append "tick <short> <receipt-hash> <cells>" to .quilt/watch.log
+#      where <receipt-hash> is .quilt/bin/quilt-hash of the receipt just
+#      written — an actual content hash, not a second copy of the short hash.
+#
+# Commits touching no cells/ path exit 0 silently, as do the hook's own
+# "quilt: cascade after ..." commits (no recursion).
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT" || exit 1
+
+case "$(git log -1 --format=%s HEAD)" in
+  "quilt: cascade after"*) exit 0 ;;
+esac
+
+CELL_PATHS=$(git diff-tree --root --no-commit-id --name-only -r HEAD -- cells/)
+[ -n "$CELL_PATHS" ] || exit 0
+
+SHORT=$(git rev-parse --short HEAD)
+CELLS=$(printf '%s\n' "$CELL_PATHS" | cut -d/ -f2 | sort -u | paste -sd, -)
+
+.quilt/bin/quilt-receipt >/dev/null
+.quilt/bin/quilt-cascade
+
+if [ -n "$(git status --porcelain -- cells/)" ]; then
+  git add cells/
+  git commit --no-verify -qm "quilt: cascade after $SHORT" >/dev/null 2>&1
+fi
+
+mkdir -p .quilt
+# Field 2 is the content hash of the receipt this tick just wrote — the field
+# the README has always called a receipt-hash and that has always been a second
+# copy of field 1. See .quilt/bin/quilt-hash.
+RH=""
+[ -f ".quilt/receipts/$SHORT.json" ] && RH=$(.quilt/bin/quilt-hash ".quilt/receipts/$SHORT.json")
+[ -n "$RH" ] || RH="none"
+printf 'tick %s %s %s\n' "$SHORT" "$RH" "$CELLS" >> .quilt/watch.log
+exit 0
+QUILT_HOOK_EOF
+
+# ---------------------------------------------------------------- post-merge
+cat > .quilt/hooks/post-merge <<'QUILT_HOOK_EOF'
+#!/bin/sh
+# quilt post-merge — the tick engine for merges.
+#
+# git runs this ONLY when a merge actually produced a commit; a fast-forward
+# never gets here because no commit was made. The substrate shipped no
+# post-merge hook, AND its post-commit probe could not have seen a merge
+# commit even if it had: `diff-tree` prints nothing for a merge without -m, so
+# post-commit exited 0 having seen nothing. A merge wrote no receipt, no
+# cascade, and no watch line. The journal had a hole exactly where the
+# collaboration risk lives.
+#
+# This hook is post-commit with one difference, and the difference is the whole
+# commit: the probe is `diff-tree -m`, so a merge is journaled as the union of
+# what it brought in from each parent. Everything after the probe is identical.
+#
+#   1. .quilt/bin/quilt-receipt  writes .quilt/receipts/<short>.json
+#   2. .quilt/bin/quilt-adjudicate refuses contradictory merges (see below)
+#   3. .quilt/bin/quilt-cascade  recomputes dial 14 of linked cells
+#   4. if cascade changed dial files: git add cells/ and auto-commit
+#      "quilt: cascade after <short>" with --no-verify
+#   5. append "tick <short> <receipt-hash> <cells>" to .quilt/watch.log
+#      where <receipt-hash> is .quilt/bin/quilt-hash of the receipt just
+#      written — an actual content hash, not a second copy of the short hash.
+#
+# $1 is 1 for a squash merge, where HEAD is an ordinary single-parent commit;
+# -m is a no-op there and the tick is journalled exactly as post-commit would.
+#
+# ON REFUSAL. The real veto is pre-merge-commit, which runs before the commit
+# exists; it is where "do not commit silently" actually has teeth. This hook
+# re-runs the same check to catch a merge that arrived with --no-verify. By
+# this point the merge commit is already written and this hook CANNOT take it
+# back — it says so rather than implying otherwise. What it can do is leave
+# the adjudication record naming the contradiction, and fail the exit code so
+# no caller treats the merge as clean.
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT" || exit 1
+
+case "$(git log -1 --format=%s HEAD)" in
+  "quilt: cascade after"*) exit 0 ;;
+esac
+
+ADJ=0
+if [ -x .quilt/bin/quilt-adjudicate ]; then
+  .quilt/bin/quilt-adjudicate --head
+  ADJ=$?
+  if [ "$ADJ" -eq 1 ]; then
+    echo "" >&2
+    echo "quilt: this merge commit ALREADY EXISTS and contradicts itself." >&2
+    echo "quilt: post-merge is too late to refuse. Undo it with:" >&2
+    echo "quilt:   git reset --hard ORIG_HEAD" >&2
+  fi
+fi
+
+CELL_PATHS=$(git diff-tree -m --root --no-commit-id --name-only -r HEAD -- cells/)
+[ -n "$CELL_PATHS" ] || exit 0
+
+SHORT=$(git rev-parse --short HEAD)
+CELLS=$(printf '%s\n' "$CELL_PATHS" | cut -d/ -f2 | sort -u | paste -sd, -)
+
+.quilt/bin/quilt-receipt >/dev/null
+.quilt/bin/quilt-cascade
+
+if [ -n "$(git status --porcelain -- cells/)" ]; then
+  git add cells/
+  git commit --no-verify -qm "quilt: cascade after $SHORT" >/dev/null 2>&1
+fi
+
+mkdir -p .quilt
+# Field 2 is the content hash of the receipt this merge just wrote — the field
+# the README has always called a receipt-hash and that has always been a second
+# copy of field 1. See .quilt/bin/quilt-hash.
+RH=""
+[ -f ".quilt/receipts/$SHORT.json" ] && RH=$(.quilt/bin/quilt-hash ".quilt/receipts/$SHORT.json")
+[ -n "$RH" ] || RH="none"
+printf 'tick %s %s %s\n' "$SHORT" "$RH" "$CELLS" >> .quilt/watch.log
+[ "$ADJ" -eq 1 ] && exit 1
+exit 0
+QUILT_HOOK_EOF
+
+# --------------------------------------------------------- pre-merge-commit
+cat > .quilt/hooks/pre-merge-commit <<'QUILT_HOOK_EOF'
+#!/bin/sh
+# quilt pre-merge-commit — the refusal.
+#
+# git runs this immediately before it writes a merge commit. A non-zero exit
+# means NO MERGE COMMIT EXISTS: HEAD does not move, the branch does not gain a
+# parent, and nothing downstream can mistake the merge for history. The merge
+# is left in progress so the tree can be inspected, undone, or resolved.
+#
+# This is the only hook that can refuse, and it is here rather than in
+# post-merge because post-merge runs after git has already recorded the commit.
+# An exit code there is a comment, not a veto. post-merge still runs the same
+# check, to catch a merge that arrived with --no-verify, and says plainly that
+# it is too late to undo what it is looking at.
+#
+# The check itself is .quilt/bin/quilt-adjudicate: two attributed claim: lines
+# for one key with two different values. No dial file is read for this and no
+# cell file is written; the only file produced is the adjudication record.
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT" || exit 1
+
+[ -x .quilt/bin/quilt-adjudicate ] || exit 0
+
+.quilt/bin/quilt-adjudicate --index
+rc=$?
+
+if [ "$rc" -eq 1 ]; then
+  echo "" >&2
+  echo "quilt: no merge commit was created. The branch still has one parent." >&2
+  echo "quilt: the merged tree is still on disk — inspect it, then" >&2
+  echo "quilt:   git merge --abort        to undo, or" >&2
+  echo "quilt:   resolve and git commit  to proceed anyway." >&2
+  exit 1
+fi
+
+exit 0
+QUILT_HOOK_EOF
+
+chmod +x .quilt/hooks/pre-commit .quilt/hooks/post-commit \
+         .quilt/hooks/post-merge .quilt/hooks/pre-merge-commit
+for b in .quilt/bin/quilt-*; do
+  [ -f "$b" ] && chmod +x "$b"
+done
+touch .quilt/watch.log
+
+echo "quilt: initialised at $ROOT"
+echo "quilt: hooks active (core.hooksPath=.quilt/hooks)"
+echo "quilt: ticks are ordinary commits touching cells/ — try .quilt/bin/quilt-tick <alias> <dial> <value>"

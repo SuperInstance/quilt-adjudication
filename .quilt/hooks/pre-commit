@@ -1,0 +1,41 @@
+#!/bin/sh
+# quilt pre-commit — FREEZE enforcement, and the merge refusal.
+#
+# A cell whose COMMITTED dial 15 (FREEZE) is > 0.5 rejects any staged change
+# to that cell. Staged paths that are only cells/<alias>/dials/15 are always
+# allowed, so a freeze can always be set or lifted (in its own commit).
+# Arithmetic uses awk, not bc (bc may be absent).
+#
+# Why the merge check lives HERE as well as in pre-merge-commit: git runs
+# pre-merge-commit on the clean `git merge` path, but it does NOT run it when
+# a conflict was resolved by hand and the merge was concluded with a plain
+# `git commit`. That is the common path, and it is the path the two-PR fixture
+# takes. Measured on git 2.39.5: with only pre-merge-commit installed, that
+# merge commit was created and the hook never ran. pre-commit does run there,
+# so the refusal is enforced from both doors.
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT" || exit 1
+
+if git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  if [ -x .quilt/bin/quilt-adjudicate ]; then
+    .quilt/bin/quilt-adjudicate --index || exit 1
+  fi
+fi
+
+STAGED=$(git diff --cached --name-only -- cells/ | sort -u)
+[ -n "$STAGED" ] || exit 0
+
+for alias in $(printf '%s\n' "$STAGED" | cut -d/ -f2 | sort -u); do
+  others=$(printf '%s\n' "$STAGED" | grep "^cells/$alias/" \
+           | grep -v "^cells/$alias/dials/15$" || true)
+  [ -n "$others" ] || continue   # freeze management only — allowed
+  frz=$(git show "HEAD:cells/$alias/dials/15" 2>/dev/null | tr -d '[:space:]')
+  frz=${frz:-0}
+  if awk -v f="$frz" 'BEGIN{exit !(f + 0 > 0.5)}'; then
+    echo "ERROR: cell $alias is frozen (dial 15 = $frz)" >&2
+    echo "       unfreeze first: .quilt/bin/quilt-tick $alias 15 0.0" >&2
+    exit 1
+  fi
+done
+exit 0

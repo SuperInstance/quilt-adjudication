@@ -1,0 +1,66 @@
+#!/bin/sh
+# quilt-receipt — write .quilt/receipts/<short>.json for HEAD.
+#
+# Fields: commit (full hash), changed_cells (aliases under cells/ touched by
+# HEAD), key_dials (per cell: obstruction = dial 1, freeze = dial 15, read
+# from the committed tree), parents, merge, ts. The timestamp is the git
+# commit time (`git log -1 --format=%ct`) — never wall clock — so receipts are
+# deterministic and reproducible from history alone.
+#
+# The changed_cells probe is `diff-tree -m`. WITHOUT -m git refuses to diff a
+# merge commit at all and prints nothing, so every merge silently produced a
+# receipt with "changed_cells": [] and "key_dials": {} — a receipt that named
+# a commit but described none of it. -m diffs the merge against EACH parent, so
+# a merge is journaled as the union of what it brought in from either side. On a
+# single-parent commit -m is a no-op, so ticks are unaffected.
+#
+# Echoes the short hash on success (used by the post-commit/post-merge hooks).
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 1
+cd "$ROOT" || exit 1
+mkdir -p .quilt/receipts
+
+FULL=$(git rev-parse HEAD)
+SHORT=$(git rev-parse --short HEAD)
+TS=$(git log -1 --format=%ct HEAD)
+PARENTS=$(git rev-list --parents -n1 HEAD | wc -w)
+PARENTS=$((PARENTS - 1))
+if [ "$PARENTS" -gt 1 ]; then MERGE=true; else MERGE=false; fi
+CELLS=$(git diff-tree -m --root --no-commit-id --name-only -r HEAD -- cells/ \
+        | cut -d/ -f2 | sort -u)
+
+# dial value from the committed tree, coerced to a number, 0 when absent
+committed_dial() { # committed_dial <alias> <n>
+  git show "HEAD:cells/$1/dials/$2" 2>/dev/null \
+    | awk '{printf "%g", $1 + 0; found=1} END{if (!found) printf "0"}'
+}
+
+cell_list=""
+dial_json=""
+n=0
+for c in $CELLS; do
+  n=$((n + 1))
+  if [ $n -eq 1 ]; then cell_list="\"$c\""; else cell_list="$cell_list, \"$c\""; fi
+  obs=$(committed_dial "$c" 1)
+  frz=$(committed_dial "$c" 15)
+  dial_json="$dial_json    \"$c\": {\"obstruction\": $obs, \"freeze\": $frz},
+"
+done
+
+OUT=".quilt/receipts/$SHORT.json"
+{
+  printf '{\n'
+  printf '  "commit": "%s",\n' "$FULL"
+  printf '  "parents": %s,\n' "$PARENTS"
+  printf '  "merge": %s,\n' "$MERGE"
+  printf '  "changed_cells": [%s],\n' "$cell_list"
+  printf '  "key_dials": {\n'
+  if [ -n "$dial_json" ]; then
+    printf '%s' "$dial_json" | sed '$ s/,$//'
+  fi
+  printf '  },\n'
+  printf '  "ts": %s\n' "$TS"
+  printf '}\n'
+} > "$OUT"
+
+echo "$SHORT"

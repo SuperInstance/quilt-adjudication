@@ -1,0 +1,50 @@
+# quilt-in-git pins  src=/tmp/ff3
+# scratch=/tmp/quilt-pins-epq872  git=2.39.5
+
+PASS P1a dial commit accepted
+PASS P1b receipt exists (.quilt/receipts/1f78454.json)
+PASS P1c receipt contains commit hash
+PASS P1d receipt contains alias a
+PASS P1e watch.log grew by exactly one line (1->2)
+PASS P1f watch line starts with 'tick' (tick 1f78454 1f78454 a)
+PASS P2a freeze commit (dial15=0.8) accepted
+PASS P2b next commit touching cell rejected (rc=1)
+PASS P2c error mentions frozen
+PASS P2d dial file unchanged by rejected commit (still 0.7 as written)
+PASS P2e committed dial1 still 0.0
+PASS P2f no new commit was created
+PASS P3a tick a dial1=0.9 committed
+PASS P3b b.dials/14 == 0.4500 (== 0.45)
+PASS P3c 'quilt: cascade after' commit exists
+PASS P4c new dial value 0.99 committed
+PASS P4d rewind (checkout prev -- cells/a/) restores 0.11
+PASS P5c fresh clone: no receipt, no watch line (hooks inert)
+PASS P5e quilt-init set core.hooksPath=.quilt/hooks
+PASS P5g receipt appears after quilt-init (4b3de7e.json)
+PASS P5h watch.log grew after quilt-init
+PASS P6b non-cell commit created NO receipt
+PASS P6c non-cell commit added NO watch.log line
+FAIL P7a clean merge failed
+PASS P8a single-claim merge accepted
+PASS P8b contradictory merge refused (rc=1)
+FAIL P8b2 merge failed but not by refusal: Auto-merging .quilt/watch.log
+CONFLICT (content): Merge conflict in .quilt/watch.log
+Auto-merging cells/inbox/body
+Automatic merge failed; fix conflicts and then commit the result.
+PASS P11a verdict_of attributes each check to its own pin
+FAIL P10 quilt-init did not write post-merge
+
+# ---- per-pin verdicts ----
+P1 receipt+watch on dial commit    : PASS
+P2 freeze enforcement              : PASS
+P3 cascade                         : PASS
+P4 rewind                          : PASS
+P5 clone needs quilt-init          : PASS
+P6 non-cell commit silent          : PASS
+P7 merge is journalled             : FAIL
+P8 contradiction refuses merge     : FAIL
+P11 verdict table attributes correctly: PASS
+P10 no hook/generator drift         : FAIL
+
+PINS: 7/10 pins pass (26 checks pass, 3 checks fail)
+PINS: FAILURES PRESENT (scratch kept for inspection: /tmp/quilt-pins-epq872)

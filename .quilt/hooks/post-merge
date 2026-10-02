@@ -1,0 +1,78 @@
+#!/bin/sh
+# quilt post-merge — the tick engine for merges.
+#
+# git runs this ONLY when a merge actually produced a commit; a fast-forward
+# never gets here because no commit was made. The substrate shipped no
+# post-merge hook, AND its post-commit probe could not have seen a merge
+# commit even if it had: `diff-tree` prints nothing for a merge without -m, so
+# post-commit exited 0 having seen nothing. A merge wrote no receipt, no
+# cascade, and no watch line. The journal had a hole exactly where the
+# collaboration risk lives.
+#
+# This hook is post-commit with one difference, and the difference is the whole
+# commit: the probe is `diff-tree -m`, so a merge is journaled as the union of
+# what it brought in from each parent. Everything after the probe is identical.
+#
+#   1. .quilt/bin/quilt-receipt  writes .quilt/receipts/<short>.json
+#   2. .quilt/bin/quilt-adjudicate refuses contradictory merges (see below)
+#   3. .quilt/bin/quilt-cascade  recomputes dial 14 of linked cells
+#   4. if cascade changed dial files: git add cells/ and auto-commit
+#      "quilt: cascade after <short>" with --no-verify
+#   5. append "tick <short> <receipt-hash> <cells>" to .quilt/watch.log
+#      where <receipt-hash> is .quilt/bin/quilt-hash of the receipt just
+#      written — an actual content hash, not a second copy of the short hash.
+#
+# $1 is 1 for a squash merge, where HEAD is an ordinary single-parent commit;
+# -m is a no-op there and the tick is journalled exactly as post-commit would.
+#
+# ON REFUSAL. The real veto is pre-merge-commit, which runs before the commit
+# exists; it is where "do not commit silently" actually has teeth. This hook
+# re-runs the same check to catch a merge that arrived with --no-verify. By
+# this point the merge commit is already written and this hook CANNOT take it
+# back — it says so rather than implying otherwise. What it can do is leave
+# the adjudication record naming the contradiction, and fail the exit code so
+# no caller treats the merge as clean.
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT" || exit 1
+
+case "$(git log -1 --format=%s HEAD)" in
+  "quilt: cascade after"*) exit 0 ;;
+esac
+
+ADJ=0
+if [ -x .quilt/bin/quilt-adjudicate ]; then
+  .quilt/bin/quilt-adjudicate --head
+  ADJ=$?
+  if [ "$ADJ" -eq 1 ]; then
+    echo "" >&2
+    echo "quilt: this merge commit ALREADY EXISTS and contradicts itself." >&2
+    echo "quilt: post-merge is too late to refuse. Undo it with:" >&2
+    echo "quilt:   git reset --hard ORIG_HEAD" >&2
+  fi
+fi
+
+CELL_PATHS=$(git diff-tree -m --root --no-commit-id --name-only -r HEAD -- cells/)
+[ -n "$CELL_PATHS" ] || exit 0
+
+SHORT=$(git rev-parse --short HEAD)
+CELLS=$(printf '%s\n' "$CELL_PATHS" | cut -d/ -f2 | sort -u | paste -sd, -)
+
+.quilt/bin/quilt-receipt >/dev/null
+.quilt/bin/quilt-cascade
+
+if [ -n "$(git status --porcelain -- cells/)" ]; then
+  git add cells/
+  git commit --no-verify -qm "quilt: cascade after $SHORT" >/dev/null 2>&1
+fi
+
+mkdir -p .quilt
+# Field 2 is the content hash of the receipt this merge just wrote — the field
+# the README has always called a receipt-hash and that has always been a second
+# copy of field 1. See .quilt/bin/quilt-hash.
+RH=""
+[ -f ".quilt/receipts/$SHORT.json" ] && RH=$(.quilt/bin/quilt-hash ".quilt/receipts/$SHORT.json")
+[ -n "$RH" ] || RH="none"
+printf 'tick %s %s %s\n' "$SHORT" "$RH" "$CELLS" >> .quilt/watch.log
+[ "$ADJ" -eq 1 ] && exit 1
+exit 0

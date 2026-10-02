@@ -1,0 +1,36 @@
+#!/bin/sh
+# quilt pre-merge-commit — the refusal.
+#
+# git runs this immediately before it writes a merge commit. A non-zero exit
+# means NO MERGE COMMIT EXISTS: HEAD does not move, the branch does not gain a
+# parent, and nothing downstream can mistake the merge for history. The merge
+# is left in progress so the tree can be inspected, undone, or resolved.
+#
+# This is the only hook that can refuse, and it is here rather than in
+# post-merge because post-merge runs after git has already recorded the commit.
+# An exit code there is a comment, not a veto. post-merge still runs the same
+# check, to catch a merge that arrived with --no-verify, and says plainly that
+# it is too late to undo what it is looking at.
+#
+# The check itself is .quilt/bin/quilt-adjudicate: two attributed claim: lines
+# for one key with two different values. No dial file is read for this and no
+# cell file is written; the only file produced is the adjudication record.
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$ROOT" || exit 1
+
+[ -x .quilt/bin/quilt-adjudicate ] || exit 0
+
+.quilt/bin/quilt-adjudicate --index
+rc=$?
+
+if [ "$rc" -eq 1 ]; then
+  echo "" >&2
+  echo "quilt: no merge commit was created. The branch still has one parent." >&2
+  echo "quilt: the merged tree is still on disk — inspect it, then" >&2
+  echo "quilt:   git merge --abort        to undo, or" >&2
+  echo "quilt:   resolve and git commit  to proceed anyway." >&2
+  exit 1
+fi
+
+exit 0
