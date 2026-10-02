@@ -1,0 +1,15 @@
+=== RED run 1: absent graph (2026-10-02T04:28:10Z) ===
+FAIL - graph/REFERRAL_GRAPH.json absent (no graph booked yet)
+
+pins-graph: 0 ok, 1 FAIL
+exit=1
+
+=== RED run 2: empty graph {"schema_version":1,"edges":[]} ===
+ok   - G1 schema_version == 1
+FAIL - G1 edge count (want 1, got '0')
+FAIL - G1 uncited endpoint fields: 5
+FAIL - G2 missing boundaries: committed-tree-only reads; receipted ≠ true; substring coverage advisory; referral-not-dependency
+FAIL - G3 edge maps no source verbs (verbs array absent or empty)
+
+pins-graph: 1 ok, 4 FAIL
+exit=1

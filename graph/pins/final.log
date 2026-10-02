@@ -1,0 +1,9 @@
+=== GREEN run: booked graph (2026-10-02T04:28:37Z) ===
+ok   - G1 schema_version == 1
+ok   - G1 exactly one booked edge
+ok   - G1 both endpoints cited (source repo+ref+as_of_commit, target repo+ref)
+ok   - G2 all four PR #1 boundary strings present verbatim
+ok   - G3 all mapped source verbs in quilt-query usage @43f10b2: attest coverage divergence trusted-but-unaudited 
+
+pins-graph: 5 ok, 0 FAIL
+exit=0
