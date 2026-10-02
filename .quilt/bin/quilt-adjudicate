@@ -204,7 +204,6 @@ OUT=".quilt/adjudications/$SHORT.json"
       printf '      "loser_status": "already in your working tree; the refusal left the tree untouched, so keeping it is a no-op",\n'
       printf '      "to_accept_the_winner": "git checkout %s -- %s && git commit --no-verify -q -m \"adjudicated: %s=%s\""' \
         "$TREE" "$wpath" "$key" "$wval"
-      "$wpath"
     printf '\n    }'
   done
   printf '\n  ]\n'
@@ -227,7 +226,8 @@ OUT=".quilt/adjudications/$SHORT.json"
   echo "  No judge ran. If the losing number is the right one:"
   for key in $CONFLICTS; do
     wpath=$(printf '%s\n' "$CLAIMS" | awk -F'\t' -v k="$key" '$2 == k && $6 == "incoming" {print $1; exit}')
-    echo "    git checkout HEAD -- $wpath && git merge --abort && git merge <branch>"
+    echo "    nothing to undo for the loser - the refusal left the tree on it already."
+    echo "    to take the winner instead:  git checkout $TREE -- $wpath && git commit"
   done
 } >&2
 
